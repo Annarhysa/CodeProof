@@ -1,0 +1,73 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0d12;
+  --panel: #12151c;
+  --border: #232733;
+  --text: #e6e8ec;
+  --muted: #8a90a0;
+  --pass: #3fb950;
+  --fail: #f85149;
+  --abstain: #d29922;
+  --accent: #58a6ff;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: var(--accent); text-decoration: none; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.PASS { background: rgba(63,185,80,.15); color: var(--pass); }
+.badge.FAIL { background: rgba(248,81,73,.15); color: var(--fail); }
+.badge.ABSTAIN { background: rgba(210,153,34,.15); color: var(--abstain); }
+.badge.PENDING, .badge.RUNNING { background: rgba(88,166,255,.15); color: var(--accent); }
+.badge.ERROR { background: rgba(248,81,73,.15); color: var(--fail); }
+
+button, input, textarea {
+  font-family: inherit;
+  background: #0d1117;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.timeline-entry { border-left: 2px solid var(--border); padding: 4px 0 4px 12px; margin-bottom: 8px; }
+.timeline-entry.pass { border-left-color: var(--pass); }
+.timeline-entry.fail { border-left-color: var(--fail); }

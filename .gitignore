@@ -1,1 +1,10 @@
-eco
+__pycache__/
+*.pyc
+.venv/
+venv/
+codeproof.db
+.env
+node_modules/
+frontend/dist/
+*.diff
+.pytest_cache/
