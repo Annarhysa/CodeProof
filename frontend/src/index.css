@@ -1,0 +1,108 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #dde1e6;
+  --text: #1a1d23;
+  --muted: #6b7280;
+  --pass: #1a7f37;
+  --fail: #cf222e;
+  --abstain: #9a6700;
+  --accent: #0969da;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: var(--accent); text-decoration: none; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.PASS { background: rgba(26,127,55,.12); color: var(--pass); }
+.badge.FAIL { background: rgba(207,34,46,.12); color: var(--fail); }
+.badge.ABSTAIN { background: rgba(154,103,0,.12); color: var(--abstain); }
+.badge.PENDING, .badge.RUNNING { background: rgba(9,105,218,.12); color: var(--accent); }
+.badge.ERROR { background: rgba(207,34,46,.12); color: var(--fail); }
+
+button, input, textarea, select {
+  font-family: inherit;
+  background: #ffffff;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { cursor: default; opacity: 0.6; }
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f6f7f9;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.timeline-entry { border-left: 2px solid var(--border); padding: 4px 0 4px 12px; margin-bottom: 8px; }
+.timeline-entry.pass { border-left-color: var(--pass); }
+.timeline-entry.fail { border-left-color: var(--fail); }
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.progress-panel {
+  text-align: center;
+  padding: 32px 16px;
+}
+.progress-panel .spinner {
+  width: 2em;
+  height: 2em;
+  border-width: 3px;
+  margin-bottom: 12px;
+}

@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "id": "sample-001-average-int-division",
+      "repo_path": "SET_AT_RUNTIME",
+      "repo_url_note": "local fixture created by tests/conftest.py from benchmark/issues/sample-001-average-int-division/",
+      "issue_title": "average() returns wrong result for lists with a non-integer mean",
+      "issue_body": "average([1, 2]) returns 1 but should return 1.5. Looks like integer division is being used instead of float division in calc.py.",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "commit_sha": null,
+      "expected_verdict": "PASS"
+    }
+  ]
+}
