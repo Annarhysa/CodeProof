@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { getEvaluation, submitReview } from "../api.js";
+import Spinner from "../components/Spinner.jsx";
 
 export default function EvaluationDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [evaluation, setEvaluation] = useState(null);
   const [notes, setNotes] = useState("");
 
@@ -20,18 +22,53 @@ export default function EvaluationDetail() {
     return () => { stop = true; };
   }, [id]);
 
-  if (!evaluation) return <div className="container">Loading...</div>;
+  if (!evaluation) {
+    return (
+      <div className="container">
+        <Spinner label="Loading evaluation..." />
+      </div>
+    );
+  }
 
   async function review(decision) {
     const updated = await submitReview(id, decision, notes);
     setEvaluation(updated);
   }
 
+  function editAndRerun() {
+    navigate("/new", {
+      state: {
+        repoUrl: evaluation.repo_url,
+        issueTitle: evaluation.issue_title,
+        issueBody: evaluation.issue_body,
+        agent: evaluation.agent_name,
+      },
+    });
+  }
+
+  const inProgress = evaluation.status === "PENDING" || evaluation.status === "RUNNING";
+  const finished = evaluation.status === "DONE" || evaluation.status === "ERROR";
+
   return (
     <div className="container">
       <h1>{evaluation.issue_title}</h1>
       <span className={`badge ${evaluation.verdict || evaluation.status}`}>{evaluation.verdict || evaluation.status}</span>
       {evaluation.reason && <p>{evaluation.reason}</p>}
+
+      {inProgress && (
+        <div className="card progress-panel">
+          <div className="spinner" />
+          <h3>Evaluation in progress ({evaluation.status.toLowerCase()})</h3>
+          <p style={{ color: "var(--muted)" }}>
+            This can take 2–3 minutes (sometimes longer with a live agent on a large repo). This
+            page updates automatically — feel free to head back and start another evaluation while
+            you wait.
+          </p>
+          <Link to="/">
+            <button type="button">Go to Dashboard</button>
+          </Link>
+        </div>
+      )}
 
       {evaluation.error && (
         <div className="card">
@@ -100,6 +137,14 @@ export default function EvaluationDetail() {
             <button onClick={() => review("REJECT")}>✕ Reject</button>
             <button onClick={() => review("ABSTAIN")}>⚠ Abstain</button>
           </div>
+        </div>
+      )}
+
+      {finished && (
+        <div className="card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={editAndRerun}>✎ Edit &amp; Re-run</button>
+          <Link to="/new"><button type="button">+ New Evaluation</button></Link>
+          <Link to="/"><button type="button">View All Evaluations</button></Link>
         </div>
       )}
     </div>

@@ -10,7 +10,7 @@ class CreateEvaluationRequest(BaseModel):
     issue_title: str
     issue_body: str
     commit_sha: str | None = None
-    agent: Literal["mock", "claude", "gemini"] = "mock"
+    agent: Literal["mock", "claude", "gemini", "ollama"] = "mock"
     benchmark_case_id: str | None = None  # required for agent="mock" (selects its scripted Playbook)
 
 

@@ -1,88 +1,103 @@
 """
-Live CodingAgent adapter backed by the Google Gemini API, mirroring
-agents/claude_agent.py's design (manual tool-use loop against the sandbox,
-structured-JSON final answers, conservative defaults on unparseable output).
-CodeProof is agent-agnostic — this and ClaudeCodingAgent implement the same
-CodingAgent interface, so evaluator/pipeline.py doesn't care which one runs.
+Live CodingAgent adapter backed by a locally-running Ollama model — the
+zero-API-key path. No account, no billing, no rate limits; runs entirely on
+your machine via Ollama's REST API (http://localhost:11434 by default).
+
+Mirrors agents/claude_agent.py and agents/gemini_agent.py exactly in
+design (manual tool-use loop, structured-JSON final answers, conservative
+defaults on unparseable output) — CodeProof is agent-agnostic, so this is a
+third interchangeable implementation of the same CodingAgent interface.
+
+Tradeoff to be upfront about: small local models are noticeably weaker at
+reliable structured tool-calling than Claude/Gemini. Expect more ABSTAINs
+from the model itself producing malformed output, on top of the same
+real-world friction (dependency installs, etc.) every agent hits.
 """
 from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
+import requests
 from dotenv import load_dotenv
-from google import genai
-from google.genai import errors, types
 
 from agents.base import CodingAgent, Patch, ReproductionResult, TestRunResult
 from sandbox.runner import Sandbox, SandboxError
 
 load_dotenv()
 
-DEFAULT_MODEL = os.environ.get("CODEPROOF_AGENT_MODEL_GEMINI", "gemini-3.6-flash")
-# 8 was enough for small fixture repos but left a real Next.js/TypeScript
-# codebase (dozens of files) stuck mid-exploration with no summary/answer
-# produced yet. Raised after observing that on a real evaluation — note this
-# means up to 20 API calls per stage, which can burn through Gemini's free
-# tier daily quota fast; lower it via env if that's a problem for you.
-MAX_TURNS_PER_STAGE = int(os.environ.get("CODEPROOF_GEMINI_MAX_TURNS", "20"))
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+DEFAULT_MODEL = os.environ.get("CODEPROOF_OLLAMA_MODEL", "llama3.1")
+MAX_TURNS_PER_STAGE = int(os.environ.get("CODEPROOF_OLLAMA_MAX_TURNS", "18"))
 MAX_TOOL_OUTPUT_CHARS = 8000
-MAX_RATE_LIMIT_RETRIES = 5
-DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 20
+REQUEST_TIMEOUT_SECONDS = 300
 
 _READ_ONLY_TOOLS = [
-    types.FunctionDeclaration(
-        name="list_files",
-        description="List files in the repository under a given directory (recursive, excludes .git and node_modules).",
-        parameters_json_schema={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "Directory, relative to repo root. Default '.'."}},
-        },
-    ),
-    types.FunctionDeclaration(
-        name="read_file",
-        description="Read a text file from the repository, relative to its root.",
-        parameters_json_schema={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    types.FunctionDeclaration(
-        name="run_command",
-        description="Run a shell command inside the isolated sandbox container, with the repository root as the working directory.",
-        parameters_json_schema={
-            "type": "object",
-            "properties": {
-                "command": {"type": "string"},
-                "timeout_seconds": {"type": "integer", "description": "Default 120."},
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List files in the repository under a given directory (recursive, excludes .git and node_modules).",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Directory, relative to repo root. Default '.'."}},
             },
-            "required": ["command"],
         },
-    ),
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a text file from the repository, relative to its root.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run a shell command inside the isolated sandbox container, with the repository root as the working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "description": "Default 120."},
+                },
+                "required": ["command"],
+            },
+        },
+    },
 ]
 
-_WRITE_TOOL = types.FunctionDeclaration(
-    name="write_file",
-    description="Create or overwrite a text file in the repository, relative to its root. Creates parent directories as needed.",
-    parameters_json_schema={
-        "type": "object",
-        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-        "required": ["path", "content"],
+_WRITE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "write_file",
+        "description": "Create or overwrite a text file in the repository, relative to its root. Creates parent directories as needed.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
     },
-)
+}
 
 
-class GeminiCodingAgent(CodingAgent):
+class OllamaConnectionError(RuntimeError):
+    pass
+
+
+class OllamaCodingAgent(CodingAgent):
     def __init__(self, sandbox: Sandbox, model: str = DEFAULT_MODEL):
-        super().__init__(name=f"gemini:{model}")
+        super().__init__(name=f"ollama:{model}")
         self.sandbox = sandbox
         self.model = model
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        self.client = genai.Client(api_key=api_key)
-        self.contents: list[types.Content] = []
+        self.messages: list[dict] = []
         self.system_prompt = ""
         self._stage_log: list[str] = []
 
@@ -97,13 +112,10 @@ class GeminiCodingAgent(CodingAgent):
         )
         self._log("system", self.system_prompt)
         self._log("instruction", f"Issue: {issue_title}\n\n{issue_body}")
-        self.contents = [
-            types.Content(role="user", parts=[types.Part.from_text(
-                text=f"Issue title: {issue_title}\n\nIssue description:\n{issue_body}",
-            )]),
-            types.Content(role="model", parts=[types.Part.from_text(
-                text="Understood. I'll investigate the repository, reproduce the bug, then propose a fix.",
-            )]),
+        self.messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": f"Issue title: {issue_title}\n\nIssue description:\n{issue_body}"},
+            {"role": "assistant", "content": "Understood. I'll investigate the repository, reproduce the bug, then propose a fix."},
         ]
 
     def inspect_repository(self) -> str:
@@ -222,73 +234,62 @@ class GeminiCodingAgent(CodingAgent):
 
     # ---- internals ---------------------------------------------------------
 
-    def _agentic_loop(self, stage_prompt: str, tools: list[types.FunctionDeclaration], max_turns: int) -> str:
+    def _agentic_loop(self, stage_prompt: str, tools: list[dict], max_turns: int) -> str:
         self._stage_log = []
-        self.contents.append(types.Content(role="user", parts=[types.Part.from_text(text=stage_prompt)]))
-        tool = types.Tool(function_declarations=tools)
+        self.messages.append({"role": "user", "content": stage_prompt})
 
         for _ in range(max_turns):
-            response = self._generate_content_with_retry(tool)
-            candidate_content = response.candidates[0].content
-            self.contents.append(candidate_content)
+            message = self._chat(tools)
+            self.messages.append(message)
 
-            for part in candidate_content.parts or []:
-                if part.text:
-                    self._log("response", part.text)
-                elif part.function_call:
-                    self._log("tool_call", f"{part.function_call.name}({json.dumps(part.function_call.args)[:300]})")
+            tool_calls = message.get("tool_calls") or []
+            content = message.get("content") or ""
+            if content.strip():
+                self._log("response", content)
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                self._log("tool_call", f"{fn.get('name')}({json.dumps(fn.get('arguments'))[:300]})")
 
-            function_calls = response.function_calls
-            if not function_calls:
-                return response.text or ""
+            if not tool_calls:
+                return content
 
-            response_parts = []
-            for fc in function_calls:
-                content, is_error = self._execute_tool(fc.name, fc.args or {})
-                self._log("tool_result", content[:1000], exit_code=(1 if is_error else 0))
-                resp_dict = {"error": content} if is_error else {"result": content}
-                response_parts.append(types.Part.from_function_response(name=fc.name, response=resp_dict))
-            self.contents.append(types.Content(role="user", parts=response_parts))
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name", "")
+                args = fn.get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                result_content, is_error = self._execute_tool(name, args)
+                self._log("tool_result", result_content[:1000], exit_code=(1 if is_error else 0))
+                self.messages.append({"role": "tool", "content": result_content})
 
         self._log("note", f"Stage stopped after reaching the {max_turns}-turn limit without a final answer.")
         return ""
 
-    def _generate_content_with_retry(self, tool: types.Tool) -> types.GenerateContentResponse:
-        """Retries two distinct transient failure modes rather than letting
-        either crash the whole evaluation:
-        - 429 (ClientError): the free tier's per-minute quota is tight and
-          easy to hit mid-agentic-loop. Retried with the server-suggested
-          delay, except a *daily* quota violation (retrying can't help that).
-        - 503 (ServerError): "model overloaded", a transient capacity issue
-          on Google's side, unrelated to our quota. Retried with a fixed
-          backoff since there's no server-suggested delay for this one."""
-        config = types.GenerateContentConfig(
-            system_instruction=self.system_prompt,
-            tools=[tool],
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        )
-        for attempt in range(MAX_RATE_LIMIT_RETRIES):
-            try:
-                return self.client.models.generate_content(model=self.model, contents=self.contents, config=config)
-            except errors.ClientError as exc:
-                if exc.code != 429 or attempt == MAX_RATE_LIMIT_RETRIES - 1:
-                    raise
-                if _is_daily_quota_exhausted(exc):
-                    # Retrying won't help — the quota resets on a ~24h clock,
-                    # not on the server's (often meaningless, e.g. "0s")
-                    # per-request retryDelay hint. Fail fast instead of
-                    # burning the rest of the retry budget pointlessly.
-                    raise
-                delay = _extract_retry_delay_seconds(exc) or DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
-                self._log("note", f"Gemini rate-limited (429); retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES}).")
-                time.sleep(delay)
-            except errors.ServerError as exc:
-                if exc.code != 503 or attempt == MAX_RATE_LIMIT_RETRIES - 1:
-                    raise
-                delay = DEFAULT_RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
-                self._log("note", f"Gemini overloaded (503); retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES}).")
-                time.sleep(delay)
-        raise RuntimeError("unreachable")
+    def _chat(self, tools: list[dict]) -> dict:
+        try:
+            resp = requests.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={"model": self.model, "messages": self.messages, "tools": tools, "stream": False},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.exceptions.ConnectionError as exc:
+            raise OllamaConnectionError(
+                f"Could not reach Ollama at {OLLAMA_HOST}. Is it installed and running? "
+                f"See docs/REPRODUCIBILITY.md for setup. ({exc})"
+            ) from None
+        if resp.status_code != 200:
+            raise RuntimeError(f"Ollama request failed ({resp.status_code}): {resp.text[:500]}")
+        data = resp.json()
+        message = data.get("message") or {}
+        return {
+            "role": "assistant",
+            "content": message.get("content", ""),
+            "tool_calls": message.get("tool_calls", []),
+        }
 
     def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, bool]:
         try:
@@ -311,32 +312,6 @@ class GeminiCodingAgent(CodingAgent):
             return f"unknown tool: {name}", True
         except SandboxError as exc:
             return f"error: {exc}", True
-
-
-def _is_daily_quota_exhausted(exc: "errors.ClientError") -> bool:
-    try:
-        details = exc.details.get("error", {}).get("details", [])
-        for d in details:
-            if d.get("@type", "").endswith("QuotaFailure"):
-                for v in d.get("violations", []):
-                    if "PerDay" in v.get("quotaId", ""):
-                        return True
-    except (AttributeError, TypeError):
-        pass
-    return False
-
-
-def _extract_retry_delay_seconds(exc: "errors.ClientError") -> float | None:
-    try:
-        details = exc.details.get("error", {}).get("details", [])
-        for d in details:
-            if d.get("@type", "").endswith("RetryInfo"):
-                delay_str = d.get("retryDelay", "")  # e.g. "18s"
-                if delay_str.endswith("s"):
-                    return float(delay_str[:-1])
-    except (AttributeError, TypeError, ValueError):
-        pass
-    return None
 
 
 def _parse_json_object(text: str) -> dict | None:

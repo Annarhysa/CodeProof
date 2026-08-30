@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listEvaluations } from "./api.js";
+import Spinner from "./components/Spinner.jsx";
 
 export default function App() {
   const [evaluations, setEvaluations] = useState([]);
@@ -33,7 +34,11 @@ export default function App() {
           <div className="card">
             <div><strong>{e.issue_title}</strong></div>
             <div style={{ color: "var(--muted)", fontSize: 12 }}>{e.repo_url}</div>
-            <span className={`badge ${e.verdict || e.status}`}>{e.verdict || e.status}</span>
+            {(e.status === "PENDING" || e.status === "RUNNING") ? (
+              <Spinner label={e.status} />
+            ) : (
+              <span className={`badge ${e.verdict || e.status}`}>{e.verdict || e.status}</span>
+            )}
           </div>
         </Link>
       ))}

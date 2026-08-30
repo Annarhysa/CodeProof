@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from agents.claude_agent import ClaudeCodingAgent
 from agents.gemini_agent import GeminiCodingAgent
 from agents.mock import MockCodingAgent
+from agents.ollama_agent import OllamaCodingAgent
 from backend.app.auth import router as github_auth_router
 from backend.app.db import EvaluationRecord, get_session, init_db
 from backend.app.github import GitHubError, fetch_issue
@@ -150,6 +151,9 @@ def _run_in_background(evaluation_id: str, req: CreateEvaluationRequest) -> None
         elif req.agent == "gemini":
             def agent_factory(sandbox):
                 return GeminiCodingAgent(sandbox)
+        elif req.agent == "ollama":
+            def agent_factory(sandbox):
+                return OllamaCodingAgent(sandbox)
         else:
             playbook = PLAYBOOKS[req.benchmark_case_id]
 
