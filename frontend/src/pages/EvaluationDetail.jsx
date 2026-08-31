@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getEvaluation, submitReview } from "../api.js";
+import { archiveEvaluation, getEvaluation, startReplay, submitReview, unarchiveEvaluation } from "../api.js";
 import Spinner from "../components/Spinner.jsx";
 
 export default function EvaluationDetail() {
@@ -8,6 +8,7 @@ export default function EvaluationDetail() {
   const navigate = useNavigate();
   const [evaluation, setEvaluation] = useState(null);
   const [notes, setNotes] = useState("");
+  const [replaying, setReplaying] = useState(false);
 
   useEffect(() => {
     let stop = false;
@@ -46,13 +47,36 @@ export default function EvaluationDetail() {
     });
   }
 
+  async function runReplay() {
+    setReplaying(true);
+    try {
+      const group = await startReplay(id, 3);
+      navigate(`/replay/${group.id}`);
+    } catch (err) {
+      alert(String(err.message || err));
+    } finally {
+      setReplaying(false);
+    }
+  }
+
+  async function toggleArchive() {
+    const updated = evaluation.archived ? await unarchiveEvaluation(id) : await archiveEvaluation(id);
+    setEvaluation(updated);
+  }
+
   const inProgress = evaluation.status === "PENDING" || evaluation.status === "RUNNING";
   const finished = evaluation.status === "DONE" || evaluation.status === "ERROR";
 
   return (
     <div className="container">
-      <h1>{evaluation.issue_title}</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <h1 style={{ margin: 0 }}>{evaluation.issue_title}</h1>
+        <button type="button" onClick={toggleArchive} style={{ flexShrink: 0 }}>
+          {evaluation.archived ? "Unarchive" : "📦 Archive"}
+        </button>
+      </div>
       <span className={`badge ${evaluation.verdict || evaluation.status}`}>{evaluation.verdict || evaluation.status}</span>
+      {evaluation.archived && <span className="badge" style={{ marginLeft: 8, background: "rgba(107,114,128,.15)", color: "var(--muted)" }}>ARCHIVED</span>}
       {evaluation.reason && <p>{evaluation.reason}</p>}
 
       {inProgress && (
@@ -102,6 +126,31 @@ export default function EvaluationDetail() {
         </div>
       )}
 
+      {evaluation.skeptic && (
+        <div className="card">
+          <h3>Skeptic (Adversarial Testing)</h3>
+          <div>{evaluation.skeptic.summary}</div>
+          {evaluation.skeptic.scenarios?.map((s, i) => (
+            <div key={i} className={`timeline-entry ${s.passed ? "pass" : "fail"}`}>
+              <strong>{s.passed ? "✓" : "✗"} {s.name}</strong>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>{s.notes}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {evaluation.failure_autopsy && (
+        <div className="card">
+          <h3>Failure Autopsy</h3>
+          <div><strong>Category:</strong> {evaluation.failure_autopsy.category}</div>
+          <div><strong>Earliest detectable point:</strong> {evaluation.failure_autopsy.earliest_detectable_point}</div>
+          <div style={{ marginTop: 8 }}><strong>Likely cause:</strong></div>
+          <p>{evaluation.failure_autopsy.likely_cause}</p>
+          <div><strong>Recommended action:</strong></div>
+          <p>{evaluation.failure_autopsy.recommended_action}</p>
+        </div>
+      )}
+
       {evaluation.evidence && (
         <div className="card">
           <h3>Evidence Timeline</h3>
@@ -143,6 +192,11 @@ export default function EvaluationDetail() {
       {finished && (
         <div className="card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={editAndRerun}>✎ Edit &amp; Re-run</button>
+          {evaluation.status === "DONE" && !evaluation.replay_group_id && (
+            <button type="button" onClick={runReplay} disabled={replaying}>
+              {replaying ? <Spinner label="Starting..." /> : "↻ Replay (3x, check reproducibility)"}
+            </button>
+          )}
           <Link to="/new"><button type="button">+ New Evaluation</button></Link>
           <Link to="/"><button type="button">View All Evaluations</button></Link>
         </div>

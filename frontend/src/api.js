@@ -1,7 +1,23 @@
 const BASE = "/api";
 
-export async function listEvaluations() {
-  const res = await fetch(`${BASE}/evaluations`);
+export async function listEvaluations(archived = false) {
+  const res = await fetch(`${BASE}/evaluations?archived=${archived}`);
+  return res.json();
+}
+
+export async function archiveEvaluation(id) {
+  const res = await fetch(`${BASE}/evaluations/${id}/archive`, { method: "POST" });
+  return res.json();
+}
+
+export async function unarchiveEvaluation(id) {
+  const res = await fetch(`${BASE}/evaluations/${id}/unarchive`, { method: "POST" });
+  return res.json();
+}
+
+export async function getProofPoints() {
+  const res = await fetch(`${BASE}/proof-points`);
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
@@ -65,5 +81,21 @@ export async function submitReview(id, decision, notes) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ decision, notes }),
   });
+  return res.json();
+}
+
+export async function startReplay(id, n = 3) {
+  const res = await fetch(`${BASE}/evaluations/${id}/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ n }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getReplay(groupId) {
+  const res = await fetch(`${BASE}/replay/${groupId}`);
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

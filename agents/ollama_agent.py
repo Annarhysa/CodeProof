@@ -132,14 +132,14 @@ class OllamaCodingAgent(CodingAgent):
     def reproduce_issue(self) -> ReproductionResult:
         prompt = (
             "Now demonstrate that the bug described in the issue actually exists in the "
-            "current code. If this repo needs dependencies installed to run anything "
-            "(node_modules, a virtualenv, etc.), run that install command first — check "
-            "for a package.json / requirements.txt / pyproject.toml if unsure — before "
-            "trying to execute code, since nothing will run otherwise. If an install "
-            "command times out or fails partway through, delete the partial install "
-            "(e.g. `rm -rf node_modules`) before retrying — a half-finished install "
-            "directory commonly causes permission/conflict errors on the next attempt, "
-            "wasting a retry on a doomed command. Use run_command to "
+            "current code. Dependencies (node_modules / pip packages / etc.) have "
+            "already been installed for you if the repo has a recognized manifest — "
+            "don't re-run an install command unless you hit a real 'module not found' "
+            "error, in which case install just the missing piece rather than "
+            "reinstalling everything. If an install command times out or fails "
+            "partway through, delete the partial install (e.g. `rm -rf node_modules`) "
+            "before retrying — a half-finished install directory commonly causes "
+            "permission/conflict errors on the next attempt. Use run_command to "
             "run something that exposes the bug (an existing test, a small script, a "
             "curl/CLI invocation — whatever fits this repo). You may create new small "
             "script files with write_file for this purpose only — do not modify existing "
@@ -191,6 +191,27 @@ class OllamaCodingAgent(CodingAgent):
         names_result = self.sandbox.run("git diff --name-only")
         diff_text = diff_result.stdout
         files_changed = [f for f in names_result.stdout.splitlines() if f.strip()]
+
+        if not files_changed:
+            # Observed firsthand: a weaker model will sometimes narrate a
+            # fix in its final answer without ever calling write_file. One
+            # explicit nudge is cheap and directly targets this — cheaper
+            # than silently accepting an empty patch as the final answer.
+            nudge = (
+                "You did not actually modify any files — git diff shows no changes. "
+                "You MUST call the write_file tool to make the edit; describing the "
+                "change in words is not enough. Make the edit now, then reply with "
+                "the same JSON format as before."
+            )
+            text = self._agentic_loop(nudge, _READ_ONLY_TOOLS + [_WRITE_TOOL], MAX_TURNS_PER_STAGE)
+            retry_data = _parse_json_object(text)
+            explanation = (retry_data or {}).get("explanation") or explanation
+
+            diff_result = self.sandbox.run("git diff")
+            names_result = self.sandbox.run("git diff --name-only")
+            diff_text = diff_result.stdout
+            files_changed = [f for f in names_result.stdout.splitlines() if f.strip()]
+
         added = sum(1 for line in diff_text.splitlines() if line.startswith("+") and not line.startswith("+++"))
         removed = sum(1 for line in diff_text.splitlines() if line.startswith("-") and not line.startswith("---"))
 
@@ -232,6 +253,10 @@ class OllamaCodingAgent(CodingAgent):
             raw_output=raw_output,
         )
 
+    def run_custom_stage(self, prompt: str, allow_write: bool = True) -> str:
+        tools = _READ_ONLY_TOOLS + [_WRITE_TOOL] if allow_write else _READ_ONLY_TOOLS
+        return self._agentic_loop(prompt, tools, MAX_TURNS_PER_STAGE)
+
     # ---- internals ---------------------------------------------------------
 
     def _agentic_loop(self, stage_prompt: str, tools: list[dict], max_turns: int) -> str:
@@ -262,6 +287,16 @@ class OllamaCodingAgent(CodingAgent):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
+                if isinstance(args, dict) and "parameters" in args and isinstance(args["parameters"], dict):
+                    # Observed firsthand with llama3.2: instead of returning
+                    # just the argument values, the model sometimes echoes
+                    # back a full {"type": "function", "function": name,
+                    # "parameters": {...}} tool-call envelope AS the
+                    # arguments object. Every real argument then looks
+                    # "missing" because it's nested one level deeper than
+                    # expected. Unwrap it rather than fail every tool call
+                    # in the run over a model formatting quirk.
+                    args = args["parameters"]
                 result_content, is_error = self._execute_tool(name, args)
                 self._log("tool_result", result_content[:1000], exit_code=(1 if is_error else 0))
                 self.messages.append({"role": "tool", "content": result_content})
@@ -292,16 +327,26 @@ class OllamaCodingAgent(CodingAgent):
         }
 
     def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, bool]:
+        # A weaker model (local Ollama models especially) can call a tool
+        # with a required argument missing entirely — return that as a
+        # normal tool-error result the model can react to, never let it
+        # crash the whole evaluation with an unhandled KeyError.
         try:
             if name == "list_files":
                 files = self.sandbox.list_files(tool_input.get("path", "."))
                 return "\n".join(files), False
             if name == "read_file":
+                if "path" not in tool_input:
+                    return "error: missing required argument 'path'", True
                 return self.sandbox.read_file(tool_input["path"]), False
             if name == "write_file":
+                if "path" not in tool_input or "content" not in tool_input:
+                    return "error: missing required argument 'path' and/or 'content'", True
                 self.sandbox.write_file(tool_input["path"], tool_input["content"])
                 return f"wrote {tool_input['path']}", False
             if name == "run_command":
+                if "command" not in tool_input:
+                    return "error: missing required argument 'command'", True
                 result = self.sandbox.run(
                     tool_input["command"], timeout=int(tool_input.get("timeout_seconds", 120)),
                 )
@@ -310,7 +355,7 @@ class OllamaCodingAgent(CodingAgent):
                 self._stage_log.append(output)
                 return output, result.exit_code != 0
             return f"unknown tool: {name}", True
-        except SandboxError as exc:
+        except (SandboxError, KeyError, TypeError, ValueError) as exc:
             return f"error: {exc}", True
 
 

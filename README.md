@@ -3,16 +3,19 @@
 **An AI coding agent changed your code. Should you trust it?**
 
 CodeProof is an independent evaluation and verification layer for AI coding
-agents (Claude, Codex, Gemini, Cursor, or a custom agent). It is not another
-coding assistant, and it does not generate code for you to trust on faith.
-Given a real GitHub issue and a patch an agent proposes, CodeProof:
+agents (Claude, Gemini, a local Ollama model, or a custom agent). It is not
+another coding assistant, and it does not generate code for you to trust on
+faith. Given a real GitHub issue and a patch an agent proposes, CodeProof:
 
 1. Confirms the bug actually reproduces before trusting any "fix"
 2. Runs the existing test suite against the patch in an isolated sandbox
 3. Hands the patch to an independent Skeptic Agent whose only job is to try
-   to break it (planned — see Status below)
-4. Builds an evidence timeline for every claim it makes
-5. Lets a human make the final call — CodeProof provides evidence, not a verdict dressed up as one
+   to break it with real adversarial scenarios
+4. Classifies *why* anything failed, and can measure how reproducible a
+   result actually is by re-running it
+5. Builds an evidence timeline for every claim it makes
+6. Lets a human make the final call — CodeProof provides evidence, not a
+   verdict dressed up as one
 
 > The agent makes the claim. CodeProof provides the evidence.
 
@@ -38,7 +41,10 @@ A coding agent's self-report is correlated with its own blind spots — if it
 missed an edge case while writing the fix, it will often miss the same edge
 case while "verifying" it. Passing the existing test suite only proves the
 patch didn't break what was already tested; it says nothing about whether
-the patch is *robust* to inputs nobody wrote a test for yet.
+the patch is *robust* to inputs nobody wrote a test for yet. See
+[docs/EVALUATION.md](docs/EVALUATION.md) for an actual, executed example of
+this gap: a naive "trust the patch" baseline reports success on a case
+where CodeProof's mandatory re-reproduction check catches a false fix.
 
 ## Architecture
 
@@ -46,37 +52,55 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full pipeline,
 component responsibilities, and security model.
 
 ```
-GitHub Issue -> Sandbox -> CodingAgent -> Reproduction -> Patch -> Tests -> Evidence -> Verdict
+GitHub Issue -> Sandbox -> Dependencies -> CodingAgent -> Reproduction -> Patch
+             -> Tests -> Skeptic -> Evidence -> Verdict -> Failure Autopsy
 ```
 
 ## Status
 
-**Implemented (P0 vertical slice)**: Docker sandbox execution, agent-agnostic
-`CodingAgent` interface + a mock/scripted adapter (real sandboxed execution,
-scripted patch selection — no LLM key required), the evaluator pipeline with
-an explicit ABSTAIN path, an evidence timeline, a FastAPI + SQLite backend,
-and a React dashboard/evaluation-detail UI with a human review action bar.
+**Implemented**: Docker sandbox (with persistent shared dependency caches),
+deterministic dependency installation, an agent-agnostic `CodingAgent`
+interface with four adapters (mock/scripted, Claude, Gemini, and a fully
+local zero-API-key Ollama adapter), the evaluator pipeline with an explicit
+ABSTAIN path, an independent Skeptic Agent for adversarial testing, a
+rule-based Failure Autopsy, Reproducibility Replay, a benchmark runner and
+baseline-vs-CodeProof comparison, a FastAPI + SQLite backend with GitHub
+OAuth login, and a React dashboard/evaluation-detail/replay UI with a human
+review action bar.
 
-**Not yet implemented**: Skeptic Agent + adversarial testing, reproducibility
-replay, failure autopsy, live LLM agent adapter, full benchmark suite,
-baseline-vs-CodeProof comparison. Tracked in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [CHANGELOG.md](CHANGELOG.md).
+**Real, honestly-scoped gaps**: the benchmark is a 3-case seed set (not the
+20-30 real historical issues the spec asks for — see
+[docs/EVALUATION.md](docs/EVALUATION.md) for why), and no live-agent
+Robustly Correct Fix Rate is reported yet. A real infra bug that was
+causing false ABSTAINs (a git "dubious ownership" failure inside the
+sandbox silently misreported as "the agent made no changes") has since
+been found and fixed; with it fixed, a live Ollama run produced an honest,
+evidence-backed FAIL — the model skipped re-verifying its own fix and ran
+the wrong test command, and CodeProof caught both — but no live run has
+reached a confirmed PASS yet. See [CHANGELOG.md](CHANGELOG.md) for the
+full account. Tracked honestly in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Evaluation methodology
 
 See [docs/EVALUATION.md](docs/EVALUATION.md) for the Robustly Correct Fix
-Rate definition and secondary metrics. No benchmark numbers are claimed
-anywhere in this repo until they come from an actual run — see
-[CHANGELOG.md](CHANGELOG.md) for exactly what has been executed so far.
+Rate definition, secondary metrics, and the actual numbers from running the
+seed benchmark — including a real, executed baseline-vs-CodeProof
+comparison. No benchmark numbers are claimed anywhere in this repo until
+they come from an actual run — see [CHANGELOG.md](CHANGELOG.md) for
+exactly what has been executed so far.
 
 ## Quickstart
 
-See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for full setup. Short version:
+See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for full setup, or
+[GUIDE.md](GUIDE.md) for a usage-focused walkthrough. Short version:
 
 ```bash
 pip install -r requirements.txt
 docker build -t codeproof-sandbox:latest sandbox
-pytest tests/test_pipeline_mock.py -v      # verify the pipeline works, no UI needed
+pytest tests/ -v                             # verify the pipeline works, no UI needed
+python -m benchmark.baseline                  # real, executed baseline-vs-CodeProof comparison
 
 uvicorn backend.app.main:app --reload --port 8000   # terminal 1
 cd frontend && npm install && npm run dev            # terminal 2
@@ -87,22 +111,30 @@ Then open http://localhost:5173.
 ## Security model
 
 Every repository and every line of agent-generated code is treated as
-untrusted and executed only inside a locked-down Docker container (no
-network, dropped capabilities, resource/time limits, no host credentials).
+untrusted and executed only inside a locked-down Docker container (dropped
+capabilities, non-root user, resource/time limits, no host credentials).
 Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#security-model).
 
 ## Limitations
 
-- No live LLM coding-agent adapter yet — only a scripted mock adapter, so
-  today's pipeline proves the *evaluation infrastructure* works, not that it
-  has evaluated a real agent's real reasoning yet.
-- No Skeptic/adversarial layer yet, so "PASS" today means "reproduced +
-  fixed + existing tests pass," not the full Robustly Correct Fix Rate
-  definition.
-- Single benchmark fixture case so far, not the full 20-30 case suite.
+- The benchmark is a 3-case seed set of real, deliberate, verified bugs —
+  not the full 20-30 real historical GitHub issues the spec calls for.
+- No live-agent Robustly Correct Fix Rate reported yet — real-world runs
+  this session hit genuine external constraints (slow installs, free-tier
+  rate limits) plus a now-fixed infra bug (a git ownership check inside the
+  sandbox was silently misreporting correct patches as "no changes") and,
+  once that was fixed, a real model-capability limitation on a weak local
+  model — all documented in [CHANGELOG.md](CHANGELOG.md); the mock-agent
+  numbers in [docs/EVALUATION.md](docs/EVALUATION.md) validate the
+  *pipeline*, not any one agent's real-world reasoning quality yet.
+- The three live agent adapters (Claude/Gemini/Ollama) duplicate a fair
+  amount of tool-use-loop code — noted as a refactor target, not done, to
+  avoid regressing tested code late.
 
 ## Future work
 
-Skeptic Agent, reproducibility replay, failure autopsy, a real benchmark of
-20-30 historical public-repo issues, baseline-vs-CodeProof comparison, and a
-live Claude-based agent adapter — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Scaling the benchmark to real historical GitHub issues, a shared base (or
+LangGraph-based) implementation for the live agent adapters to remove
+duplication, and getting an actual live-agent Robustly Correct Fix Rate
+once external rate-limit/billing constraints allow a full run — see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
