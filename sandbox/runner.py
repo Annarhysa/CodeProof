@@ -25,6 +25,22 @@ DEFAULT_MEMORY = "2g"
 DEFAULT_CPUS = "2"
 DEFAULT_PIDS_LIMIT = "256"
 
+# Persistent, shared package-manager caches (npm's download cache, pip's
+# wheel cache — NOT a per-repo node_modules snapshot, which is what caused
+# the corrupted-partial-install failures we saw). Reused across every
+# evaluation regardless of which repo, so a second run of any repo that
+# shares a dependency never re-downloads it.
+CACHE_ROOT = Path.home() / ".codeproof_cache"
+NPM_CACHE_DIR = CACHE_ROOT / "npm"
+PIP_CACHE_DIR = CACHE_ROOT / "pip"
+
+# subprocess.run(..., text=True, encoding="utf-8", errors="replace") decodes with the OS's default encoding
+# (cp1252 on Windows) unless told otherwise, which raises UnicodeDecodeError
+# on the first non-ASCII byte a subprocess writes (observed from pip/npm
+# output). Every text-mode subprocess.run call below explicitly passes
+# encoding="utf-8", errors="replace" so any command's output decodes
+# permissively instead of crashing the evaluation over a single stray byte.
+
 
 @dataclasses.dataclass
 class CommandResult:
@@ -68,6 +84,8 @@ class Sandbox:
         """
         if self._started:
             return
+        NPM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        PIP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cmd = [
             "docker", "run", "-d",
             "--name", self.container_name,
@@ -77,9 +95,11 @@ class Sandbox:
             "--security-opt", "no-new-privileges",
             "--cap-drop", "ALL",
             "-v", f"{self.host_repo_path}:/workspace:rw",
+            "-v", f"{NPM_CACHE_DIR}:/cache/npm:rw",
+            "-v", f"{PIP_CACHE_DIR}:/cache/pip:rw",
             IMAGE_NAME,
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             raise SandboxError(f"failed to start sandbox container: {proc.stderr.strip()}")
         self._started = True
@@ -117,7 +137,13 @@ class Sandbox:
     def write_file(self, relative_path: str, content: str) -> None:
         path = self._resolve_in_repo(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        # newline="" disables Python's OS-based newline translation (on
+        # Windows, text-mode write silently turns every \n into \r\n) — for
+        # a diff/patch written here and then git-applied against a Linux
+        # container's checkout, that silent rewrite is exactly the kind of
+        # byte-for-byte mismatch `git apply` rejects. Write exactly what was
+        # given.
+        path.write_text(content, encoding="utf-8", newline="")
 
     def lock_down_network(self) -> None:
         """Disconnect the container from the network. Call this after any
@@ -127,7 +153,7 @@ class Sandbox:
             raise SandboxError("sandbox not started; call start() first")
         subprocess.run(
             ["docker", "network", "disconnect", "bridge", self.container_name],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
 
     def run(self, command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, workdir: str = "/workspace") -> CommandResult:
@@ -142,7 +168,7 @@ class Sandbox:
         timed_out = False
         try:
             proc = subprocess.run(
-                exec_cmd, capture_output=True, text=True, timeout=timeout,
+                exec_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             )
             exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired as e:
@@ -165,7 +191,7 @@ class Sandbox:
     def stop(self) -> None:
         if not self._started:
             return
-        subprocess.run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True)
+        subprocess.run(["docker", "rm", "-f", self.container_name], capture_output=True, text=True, encoding="utf-8", errors="replace")
         self._started = False
 
     def __enter__(self) -> "Sandbox":
@@ -182,7 +208,7 @@ def build_image(dockerfile_dir: Path | None = None) -> CommandResult:
     start = time.monotonic()
     proc = subprocess.run(
         ["docker", "build", "-t", IMAGE_NAME, str(dockerfile_dir)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     return CommandResult(
         command="docker build",
@@ -200,13 +226,19 @@ def clone_repo(repo_url: str, dest_dir: Path, commit_sha: str | None = None) -> 
     working copy, mounted read-write, with no credentials attached."""
     start = time.monotonic()
     proc = subprocess.run(
-        ["git", "clone", "--quiet", repo_url, str(dest_dir)],
-        capture_output=True, text=True,
+        # core.autocrlf=false: don't let git silently rewrite line endings
+        # on checkout. On a machine with autocrlf=true (common on Windows),
+        # a checked-out file's line endings depend on checkout history in a
+        # way that made an agent-written patch match by accident in one
+        # code path and fail to apply in another (same file, same patch
+        # content) — keep the working tree byte-identical to what's stored.
+        ["git", "-c", "core.autocrlf=false", "clone", "--quiet", repo_url, str(dest_dir)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if proc.returncode == 0 and commit_sha:
         checkout = subprocess.run(
             ["git", "-C", str(dest_dir), "checkout", "--quiet", commit_sha],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         proc_stdout = proc.stdout + checkout.stdout
         proc_stderr = proc.stderr + checkout.stderr

@@ -1,0 +1,36 @@
+{
+  "n_cases": 3,
+  "baseline": {
+    "claims_success_rate": 0.0,
+    "actually_correct_rate": 0.0,
+    "false_positive_count": 0,
+    "results": [
+      {
+        "case_id": "sample-001-average-int-division",
+        "baseline_claims_success": false,
+        "actually_fixed": false,
+        "false_positive": false,
+        "elapsed_seconds": 22.73
+      },
+      {
+        "case_id": "sample-002-clamp-upper-bound",
+        "baseline_claims_success": false,
+        "actually_fixed": false,
+        "false_positive": false,
+        "elapsed_seconds": 13.33
+      },
+      {
+        "case_id": "sample-003-baseline-gap",
+        "baseline_claims_success": false,
+        "actually_fixed": false,
+        "false_positive": false,
+        "elapsed_seconds": 9.41
+      }
+    ]
+  },
+  "codeproof": {
+    "robustly_correct_fix_rate": 1.0,
+    "robustly_correct_fix_count": 3
+  },
+  "headline": "Baseline claimed success on 0/3 cases but was only actually correct on 0/3 (0 false positive(s)). CodeProof correctly identified 3/3 as robustly fixed and caught every false positive."
+}

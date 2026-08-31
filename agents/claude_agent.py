@@ -126,14 +126,14 @@ class ClaudeCodingAgent(CodingAgent):
     def reproduce_issue(self) -> ReproductionResult:
         prompt = (
             "Now demonstrate that the bug described in the issue actually exists in the "
-            "current code. If this repo needs dependencies installed to run anything "
-            "(node_modules, a virtualenv, etc.), run that install command first — check "
-            "for a package.json / requirements.txt / pyproject.toml if unsure — before "
-            "trying to execute code, since nothing will run otherwise. If an install "
-            "command times out or fails partway through, delete the partial install "
-            "(e.g. `rm -rf node_modules`) before retrying — a half-finished install "
-            "directory commonly causes permission/conflict errors on the next attempt, "
-            "wasting a retry on a doomed command. Use run_command to "
+            "current code. Dependencies (node_modules / pip packages / etc.) have "
+            "already been installed for you if the repo has a recognized manifest — "
+            "don't re-run an install command unless you hit a real 'module not found' "
+            "error, in which case install just the missing piece rather than "
+            "reinstalling everything. If an install command times out or fails "
+            "partway through, delete the partial install (e.g. `rm -rf node_modules`) "
+            "before retrying — a half-finished install directory commonly causes "
+            "permission/conflict errors on the next attempt. Use run_command to "
             "run something that exposes the bug (an existing test, a small script, a "
             "curl/CLI invocation — whatever fits this repo). You may create new small "
             "script files with write_file for this purpose only — do not modify existing "
@@ -185,6 +185,27 @@ class ClaudeCodingAgent(CodingAgent):
         names_result = self.sandbox.run("git diff --name-only")
         diff_text = diff_result.stdout
         files_changed = [f for f in names_result.stdout.splitlines() if f.strip()]
+
+        if not files_changed:
+            # Observed firsthand (weaker models especially): a final answer
+            # can narrate a fix without ever calling write_file. One
+            # explicit nudge is cheap and directly targets this — cheaper
+            # than silently accepting an empty patch as the final answer.
+            nudge = (
+                "You did not actually modify any files — git diff shows no changes. "
+                "You MUST call the write_file tool to make the edit; describing the "
+                "change in words is not enough. Make the edit now, then reply with "
+                "the same JSON format as before."
+            )
+            text = self._agentic_loop(nudge, _READ_ONLY_TOOLS + [_WRITE_TOOL], MAX_TURNS_PER_STAGE)
+            retry_data = _parse_json_object(text)
+            explanation = (retry_data or {}).get("explanation") or explanation
+
+            diff_result = self.sandbox.run("git diff")
+            names_result = self.sandbox.run("git diff --name-only")
+            diff_text = diff_result.stdout
+            files_changed = [f for f in names_result.stdout.splitlines() if f.strip()]
+
         added = sum(1 for line in diff_text.splitlines() if line.startswith("+") and not line.startswith("+++"))
         removed = sum(1 for line in diff_text.splitlines() if line.startswith("-") and not line.startswith("---"))
 
@@ -225,6 +246,10 @@ class ClaudeCodingAgent(CodingAgent):
             total=int(data.get("total", 0)),
             raw_output=raw_output,
         )
+
+    def run_custom_stage(self, prompt: str, allow_write: bool = True) -> str:
+        tools = _READ_ONLY_TOOLS + [_WRITE_TOOL] if allow_write else _READ_ONLY_TOOLS
+        return self._agentic_loop(prompt, tools, MAX_TURNS_PER_STAGE)
 
     # ---- internals ---------------------------------------------------------
 
@@ -268,16 +293,26 @@ class ClaudeCodingAgent(CodingAgent):
         return ""
 
     def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, bool]:
+        # A model can call a tool with a required argument missing entirely
+        # — return that as a normal tool-error result the model can react
+        # to, never let it crash the whole evaluation with an unhandled
+        # KeyError.
         try:
             if name == "list_files":
                 files = self.sandbox.list_files(tool_input.get("path", "."))
                 return "\n".join(files), False
             if name == "read_file":
+                if "path" not in tool_input:
+                    return "error: missing required argument 'path'", True
                 return self.sandbox.read_file(tool_input["path"]), False
             if name == "write_file":
+                if "path" not in tool_input or "content" not in tool_input:
+                    return "error: missing required argument 'path' and/or 'content'", True
                 self.sandbox.write_file(tool_input["path"], tool_input["content"])
                 return f"wrote {tool_input['path']}", False
             if name == "run_command":
+                if "command" not in tool_input:
+                    return "error: missing required argument 'command'", True
                 result = self.sandbox.run(
                     tool_input["command"], timeout=int(tool_input.get("timeout_seconds", 120)),
                 )
@@ -286,7 +321,7 @@ class ClaudeCodingAgent(CodingAgent):
                 self._stage_log.append(output)
                 return output, result.exit_code != 0
             return f"unknown tool: {name}", True
-        except SandboxError as exc:
+        except (SandboxError, KeyError, TypeError, ValueError) as exc:
             return f"error: {exc}", True
 
 

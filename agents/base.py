@@ -77,6 +77,16 @@ class CodingAgent(abc.ABC):
     def run_tests(self) -> "TestRunResult":
         """Run the repo's existing test suite after the patch is applied."""
 
+    @abc.abstractmethod
+    def run_custom_stage(self, prompt: str, allow_write: bool = True) -> str:
+        """Run one open-ended stage with a caller-supplied prompt, using the
+        same tool-use loop as the built-in stages, and return the model's
+        final text response. Used by evaluator/skeptic.py to drive an
+        independent adversarial-testing pass without hardcoding that logic
+        into every provider adapter. `allow_write` controls whether the
+        write_file tool is offered — the skeptic needs it to author
+        adversarial test scripts."""
+
 
 @dataclasses.dataclass
 class TestRunResult:

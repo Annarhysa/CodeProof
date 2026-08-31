@@ -1,0 +1,42 @@
+{
+  "agent": "mock",
+  "run_skeptic": true,
+  "n_cases": 3,
+  "robustly_correct_fix_count": 3,
+  "robustly_correct_fix_rate": 1.0,
+  "results": [
+    {
+      "case_id": "sample-001-average-int-division",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "expected_verdict": "PASS",
+      "actual_verdict": "PASS",
+      "matched_expected": true,
+      "robustly_correct_fix": true,
+      "elapsed_seconds": 20.62,
+      "reason": "Bug reproduced, patch resolves reproduction, existing tests pass. Skeptic ran 0 adversarial scenario(s), all passed."
+    },
+    {
+      "case_id": "sample-002-clamp-upper-bound",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "expected_verdict": "PASS",
+      "actual_verdict": "PASS",
+      "matched_expected": true,
+      "robustly_correct_fix": true,
+      "elapsed_seconds": 21.22,
+      "reason": "Bug reproduced, patch resolves reproduction, existing tests pass. Skeptic ran 2 adversarial scenario(s), all passed."
+    },
+    {
+      "case_id": "sample-003-baseline-gap",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "expected_verdict": "PASS",
+      "actual_verdict": "PASS",
+      "matched_expected": true,
+      "robustly_correct_fix": true,
+      "elapsed_seconds": 22.72,
+      "reason": "Bug reproduced, patch resolves reproduction, existing tests pass. Skeptic ran 0 adversarial scenario(s), all passed."
+    }
+  ]
+}

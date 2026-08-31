@@ -40,6 +40,7 @@ export default function NewEvaluation() {
   const [issueTitle, setIssueTitle] = useState(prefill?.issueTitle || "");
   const [issueBody, setIssueBody] = useState(prefill?.issueBody || "");
   const [agent, setAgent] = useState(prefill?.agent || "gemini");
+  const [runSkeptic, setRunSkeptic] = useState(true);
   const [benchmarkCaseId, setBenchmarkCaseId] = useState("sample-001-average-int-division");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -141,6 +142,7 @@ export default function NewEvaluation() {
         issue_body: issueBody,
         agent,
         benchmark_case_id: agent === "mock" ? benchmarkCaseId : null,
+        run_skeptic: runSkeptic,
       });
       navigate(`/evaluations/${evaluation.id}`);
     } catch (err) {
@@ -286,10 +288,10 @@ export default function NewEvaluation() {
           <label>
             Agent
             <select value={agent} onChange={(e) => setAgent(e.target.value)} style={{ width: "100%" }}>
-              <option value="gemini">gemini (live, reasons about any repo — needs GEMINI_API_KEY)</option>
-              <option value="claude">claude (live, reasons about any repo — needs ANTHROPIC_API_KEY)</option>
-              <option value="ollama">ollama (live, local, no API key — needs Ollama running on your machine)</option>
-              <option value="mock">mock (scripted, no LLM — only works on the seeded benchmark case)</option>
+              <option value="gemini">gemini</option>
+              <option value="claude">claude</option>
+              <option value="ollama">ollama</option>
+              <option value="mock">mock</option>
             </select>
           </label>
           {agent === "mock" && (
@@ -298,6 +300,10 @@ export default function NewEvaluation() {
               <input value={benchmarkCaseId} onChange={(e) => setBenchmarkCaseId(e.target.value)} style={{ width: "100%" }} />
             </label>
           )}
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={runSkeptic} onChange={(e) => setRunSkeptic(e.target.checked)} style={{ width: "auto" }} />
+            Run Skeptic adversarial testing after a PASS (uses extra agent turns/API calls)
+          </label>
           {error && <pre style={{ color: "var(--fail)" }}>{error}</pre>}
           <button type="submit" disabled={submitting}>
             {submitting ? <Spinner label="Starting..." /> : "[ START EVALUATION ]"}

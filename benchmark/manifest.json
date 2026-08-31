@@ -2,14 +2,32 @@
   "cases": [
     {
       "id": "sample-001-average-int-division",
-      "repo_path": "SET_AT_RUNTIME",
-      "repo_url_note": "local fixture created by tests/conftest.py from benchmark/issues/sample-001-average-int-division/",
+      "repo_dir": "benchmark/issues/sample-001-average-int-division/repo",
       "issue_title": "average() returns wrong result for lists with a non-integer mean",
       "issue_body": "average([1, 2]) returns 1 but should return 1.5. Looks like integer division is being used instead of float division in calc.py.",
       "difficulty": "easy",
       "bug_type": "logic",
-      "commit_sha": null,
       "expected_verdict": "PASS"
+    },
+    {
+      "id": "sample-002-clamp-upper-bound",
+      "repo_dir": "benchmark/issues/sample-002-clamp-upper-bound/repo",
+      "issue_title": "clamp() returns wrong value above the upper bound",
+      "issue_body": "clamp(15, 0, 10) should return 10 but returns 0. Looks like the above-high branch returns low instead of high.",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "expected_verdict": "PASS"
+    },
+    {
+      "id": "sample-003-baseline-gap",
+      "repo_dir": "benchmark/issues/sample-003-baseline-gap/repo",
+      "issue_title": "product() returns the sum of a list instead of the product",
+      "issue_body": "product([2, 3, 4]) returns 9 (the sum) instead of 24 (the product). The accumulator starts at 0 and uses + instead of starting at 1 and using *.",
+      "difficulty": "easy",
+      "bug_type": "logic",
+      "expected_verdict": "PASS",
+      "notes": "Also used by benchmark/baseline.py to demonstrate the baseline-vs-CodeProof gap: a naive, unverified 'baseline' patch for this case looks plausible (renames the accumulator) but doesn't actually fix the bug — only CodeProof's mandatory re-reproduction check catches that."
     }
-  ]
+  ],
+  "note": "Seed set (3 cases), not the full 20-30 the spec asks for. Each case is a real, deliberate, verified bug with a real test suite — but scaling to a full historical-GitHub-issue benchmark requires running many live-agent evaluations, which this session's actual constraints (Gemini free-tier daily quota, slow install times, no paid Claude credit at time of writing) made impractical to execute honestly. The runner (run_benchmark.py) and comparison (baseline.py) are built to scale to a larger manifest without changes — adding cases is just adding entries here plus a Playbook."
 }

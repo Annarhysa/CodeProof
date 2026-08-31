@@ -9,6 +9,9 @@
   --fail: #cf222e;
   --abstain: #9a6700;
   --accent: #0969da;
+  --button-bg: #dbeafe;
+  --button-bg-hover: #bfdbfe;
+  --button-border: #93c5fd;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
@@ -46,7 +49,7 @@ a { color: var(--accent); text-decoration: none; }
 .badge.PENDING, .badge.RUNNING { background: rgba(9,105,218,.12); color: var(--accent); }
 .badge.ERROR { background: rgba(207,34,46,.12); color: var(--fail); }
 
-button, input, textarea, select {
+input, textarea, select {
   font-family: inherit;
   background: #ffffff;
   color: var(--text);
@@ -54,8 +57,18 @@ button, input, textarea, select {
   border-radius: 6px;
   padding: 8px;
 }
-button { cursor: pointer; }
-button:hover { border-color: var(--accent); }
+
+button {
+  font-family: inherit;
+  background: var(--button-bg);
+  color: var(--text);
+  border: 1px solid var(--button-border);
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+button:hover { background: var(--button-bg-hover); border-color: var(--accent); }
 button:disabled { cursor: default; opacity: 0.6; }
 
 pre {
@@ -99,6 +112,12 @@ pre {
 .progress-panel {
   text-align: center;
   padding: 32px 16px;
+  margin-top: 12vh;
+  min-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .progress-panel .spinner {
   width: 2em;

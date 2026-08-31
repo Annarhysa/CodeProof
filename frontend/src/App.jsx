@@ -12,21 +12,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const done = evaluations.filter((e) => e.status === "DONE");
-  const passRate = done.length ? Math.round((done.filter((e) => e.verdict === "PASS").length / done.length) * 100) : null;
-
   return (
     <div className="container">
-      <h1>CodeProof</h1>
-      <p style={{ color: "var(--muted)" }}>Independent evaluation and verification layer for AI coding agents.</p>
-
-      <div className="card">
-        <strong>Robustly Correct Fix Rate:</strong> {passRate === null ? "n/a" : `${passRate}%`}{" "}
-        <span style={{ color: "var(--muted)" }}>({done.length} evaluated)</span>
-        <div style={{ marginTop: 8 }}>
-          <Link to="/new"><button>+ New Evaluation</button></Link>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <h1>CodeProof</h1>
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <Link to="/archive"><button type="button">Archive</button></Link>
+          <Link to="/proof-points"><button type="button">Proof Points</button></Link>
         </div>
       </div>
+      <p style={{ color: "var(--muted)" }}>Independent evaluation and verification layer for AI coding agents.</p>
+      <Link to="/new"><button>+ New Evaluation</button></Link>
 
       <h3>Recent Evaluations</h3>
       {evaluations.map((e) => (

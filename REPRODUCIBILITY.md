@@ -58,6 +58,24 @@ aistudio.google.com):
   `CODEPROOF_AGENT_MODEL_GEMINI` in `.env` or the `DEFAULT_MODEL` in
   `agents/gemini_agent.py`.
 
+**Ollama** — zero API key, runs entirely on your machine:
+- Install from ollama.com, then `ollama pull llama3.2` (or another
+  tool-calling-capable model — `qwen2.5`, `mistral-nemo`) and make sure the
+  server is reachable at `http://localhost:11434` (`curl
+  http://localhost:11434/api/version`).
+- Set `CODEPROOF_OLLAMA_MODEL` in `.env` if you pull a different model than
+  the default (`llama3.2`).
+- Honest expectation: a small local model is noticeably weaker at reliable
+  structured tool-calling than Claude/Gemini — expect more `ABSTAIN`s from
+  the model itself producing malformed output or losing track of the real
+  repo, on top of the same real-world friction (slow installs) every agent
+  hits. Concretely observed with `llama3.2`: it will sometimes skip
+  actually re-running a verification command and just repeat its previous
+  answer, and will guess a test-runner command (e.g. `npm test`) instead
+  of checking which manifest is actually present. CodeProof's pipeline
+  doesn't trust either without evidence, so these surface as an honest
+  FAIL, not a silently-wrong PASS — see CHANGELOG.md, 2026-08-31.
+
 ## Run the backend
 
 ```bash
@@ -83,11 +101,29 @@ pytest tests/ -v
 - `test_pipeline_mock.py` — mock agent against the known fixture. No
   credentials needed; asserts a PASS verdict backed by real sandboxed
   command output. Skips (not fails) if Docker isn't available.
-- `test_claude_agent_smoke.py` / `test_gemini_agent_smoke.py` — same
-  fixture, driven by a real live agent. Skip if the relevant API key isn't
-  set. These assert only that the pipeline reaches a real verdict
-  (PASS/FAIL/ABSTAIN) with a non-empty trajectory — a live agent's exact
-  behavior isn't asserted turn-by-turn, since it's non-deterministic.
+- `test_claude_agent_smoke.py` / `test_gemini_agent_smoke.py` /
+  `test_ollama_agent_smoke.py` — same fixture, driven by a real live agent.
+  Skip if the relevant API key/Ollama instance isn't available. These
+  assert only that the pipeline reaches a real verdict (PASS/FAIL/ABSTAIN)
+  with a non-empty trajectory — a live agent's exact behavior isn't
+  asserted turn-by-turn, since it's non-deterministic.
+
+## Run the benchmark suite
+
+```bash
+python -m benchmark.run_benchmark              # mock agent, free, deterministic
+python -m benchmark.run_benchmark --agent claude
+python -m benchmark.baseline                    # baseline vs. CodeProof comparison
+```
+
+Results are saved to `benchmark/results/*.json`. See `docs/EVALUATION.md`
+for what the seed set's actual numbers are and what they show.
+
+## Try Reproducibility Replay
+
+From the UI: open any finished evaluation, click **↻ Replay**. From the
+API: `POST /evaluations/{id}/replay` with `{"n": 3}`, then poll
+`GET /replay/{id}` for the consistency summary.
 
 ## Cost/time
 

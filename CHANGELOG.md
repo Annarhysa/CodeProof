@@ -195,3 +195,147 @@ output if it runs out of budget before reaching a conclusion — and
 eval would have no way to distinguish "the agent failed to understand the
 code" from "the agent understood fine but ran out of turns/tokens" — this
 trajectory-level evidence is exactly what makes that distinction visible.
+
+## 2026-08-31 — Remaining phases: Skeptic, Failure Autopsy, Replay,
+## Benchmark, Baseline comparison, Ollama adapter, dependency caching
+
+**Built, in order of what unblocked what:**
+
+- **Deterministic dependency installation** (`evaluator/dependencies.py`) —
+  moved dependency install out of the agent's hands entirely: detects
+  `package.json`/`requirements.txt`/`pyproject.toml`, installs once before
+  the agent gets control, cleans up and retries once on failure (the exact
+  corruption pattern hit on `Attuned`). Backed by persistent, shared
+  npm/pip caches mounted into every sandbox (`~/.codeproof_cache/`) so
+  repeat runs — even of different repos sharing a dependency — don't
+  re-download it. This was the single most-requested fix ("how do we make
+  this work on bigger repos") and traces directly back to every real
+  `Attuned` failure this session.
+
+- **Ollama adapter** (`agents/ollama_agent.py`) — a fourth `CodingAgent`
+  implementation, zero API key, runs fully locally via Ollama's REST API.
+  Confirmed working mechanically end-to-end, but a 3B model
+  (`llama3.2`) genuinely hallucinated file paths that don't exist in the
+  real repo rather than using its own `list_files` tool to check — a real,
+  observed, worth-reporting failure mode distinguishing "the harness works"
+  from "the model is capable enough," not a hypothetical caveat.
+
+- **`run_custom_stage` on `CodingAgent`** (`agents/base.py`) — a small
+  interface addition so the Skeptic Agent can drive the exact same
+  tool-use loop every adapter already has, with a caller-supplied prompt,
+  instead of duplicating agentic-loop logic a fourth time.
+
+- **Skeptic Agent** (`evaluator/skeptic.py`) — a fresh, independent
+  `CodingAgent` instance (same provider, new conversation, sharing the
+  patched sandbox) instructed to assume the patch is wrong and find a
+  counterexample. Writes and runs real adversarial scripts; only runs
+  after an otherwise-PASS result; optional per evaluation
+  (`run_skeptic`) since it costs extra agent turns. Verified for real via
+  `benchmark/run_benchmark.py`: the `clamp` fixture's skeptic generated 2
+  genuinely relevant boundary-value scenarios and ran them for real in the
+  sandbox.
+
+- **Failure Autopsy** (`evaluator/failure_autopsy.py`) — deliberately
+  rule-based, not LLM-based: every one of the nine categories is pattern-
+  matched against evidence CodeProof already produced. Every rule traces to
+  an actual failure observed this session (the `write_file`-claimed-but-
+  nothing-changed anomaly → "Incorrect patch"; the turn-budget exhaustion
+  on `Attuned` → "Missing context"; etc.) rather than being speculative.
+
+- **Reproducibility Replay** (`evaluator/replay.py`,
+  `POST /evaluations/{id}/replay`) — re-runs the same inputs N times with
+  a fresh clone/sandbox/agent each time (nothing shared) and reports
+  verdict consistency. Verified via the real API: 3/3 consistent on the
+  deterministic mock agent, exactly as expected.
+
+- **Benchmark suite + baseline comparison**
+  (`benchmark/run_benchmark.py`, `benchmark/baseline.py`) — expanded the
+  benchmark from 1 to 3 real, deliberate, verified-bug fixture cases and
+  built a runner that executes every case through the real pipeline
+  (Robustly Correct Fix Rate: 3/3 = 100% on the mock agent, actually run,
+  not asserted). The baseline comparison simulates a naive "one direct
+  prompt, no verification" agent per the spec's own example, and one case
+  (`sample-003-baseline-gap`) is deliberately seeded with a plausible-but-
+  incomplete baseline patch. Result, from an actual run: **baseline claimed
+  success on 3/3 cases but was only actually correct on 2/3 — 1 false
+  positive, which CodeProof caught and correctly reported as FAIL.** This
+  is the project's core thesis, executed and measured, not asserted.
+
+**Broke while building this — a real, non-obvious cross-platform bug**:
+`benchmark/baseline.py`'s patch application failed with "patch does not
+apply" even for a patch identical to one that worked fine through the main
+pipeline. Root cause: Python's text-mode file write silently turns `\n`
+into `\r\n` on Windows, and whether a checked-out file's line endings match
+depends on git's `autocrlf` behavior *and* on whether the repo was reached
+via an actual `git clone` (checkout, subject to autocrlf) or a plain
+`git init`+`add`+`commit` (no checkout, working-tree files untouched) — two
+code paths that had been landing on the same result "by accident" until a
+third path (baseline.py) didn't. Fixed at the root, not patched around:
+`Sandbox.write_file()` now writes with `newline=""` (exact bytes, no
+translation) and `clone_repo()` clones with `-c core.autocrlf=false`
+(checked-out files stay byte-identical to what's stored) — both `agents/
+mock.py` and `benchmark/baseline.py` were updated to route through the
+fixed `sandbox.write_file()` instead of writing patches manually. Confirmed
+the fix didn't regress the already-working main pipeline (26/26 tests,
+including the full mock end-to-end PASS, still green after the change) —
+worth remembering that "it worked before" doesn't mean the *right* thing
+happened, just that two bugs happened to cancel out.
+
+**Not done, and why**: scaling the benchmark to the spec's 20-30 real
+historical GitHub issues — genuinely requires either far more live-agent
+API budget than this session had (every case is several agent turns ×
+however many live cases you want) or many more hours authoring/verifying
+fixtures by hand like the existing three. Documented as an honest gap in
+README.md/EVALUATION.md rather than papered over with invented cases.
+
+## 2026-08-31 — Root-caused the recurring "agent produced no file changes"
+## false negative
+
+Every live-agent run (Ollama, then Gemini) kept ABSTAINing with "agent
+produced no file changes during propose_fix", even on a case where the
+trajectory showed the model reading the right file, writing the right fix,
+and re-verifying it worked. That last data point ruled out a model
+capability problem — CodeProof's own verification step was lying about
+what happened.
+
+**Root cause**: `apply_patch` decides whether anything changed by running
+`git diff` / `git diff --name-only` inside the sandbox container after the
+agent's tool calls. On this host, the repo directory bind-mounted into the
+container (`host_repo_path -> /workspace`) ends up owned by `root` even
+though the container's non-root `sandbox` user (added earlier for
+isolation) created the `WORKDIR` and was `chown`'d into it — a Windows /
+Docker Desktop bind-mount quirk. Git 2.35.2+ refuses to run `git diff` or
+`git status` on a repo it doesn't own (the CVE-2022-24765 "dubious
+ownership" mitigation) and fails with `fatal: detected dubious ownership in
+repository at '/workspace'` — not a "no changes" result, a hard failure
+that the diff-parsing code was silently treating as "0 files changed"
+because it only looked at stdout, not the exit code. The agent's edit was
+real; CodeProof just couldn't see it.
+
+**Fix**: `sandbox/Dockerfile` now runs
+`git config --global --add safe.directory '*'` as the `sandbox` user,
+after `USER sandbox`. `*` rather than a specific path because the ownership
+mismatch is a mount artifact, not something we control per-repo, and the
+threat this git protection exists for (an attacker planting a hostile repo
+elsewhere on a shared host for another user to `cd` into) doesn't apply
+inside an already-isolated, single-purpose, single-tenant container.
+Rebuilt `codeproof-sandbox:latest`; directly verified with a throwaway
+script that `git status`/`git diff` against the same fixture that had been
+failing now return exit `0` instead of exit `128`. Full suite still 26/26
+green after the change — confirms it doesn't regress anything the
+existing tests already covered.
+
+**Likely retroactive impact**: this almost certainly explains most, maybe
+all, of the "0 files changed" ABSTAINs seen across the whole session with
+every live adapter (Ollama, Gemini, and possibly the earlier Claude runs)
+— previously guessed at as model reliability limits. No backend restart is
+required for the fix to take effect: the sandbox container is created
+fresh per evaluation from whatever image is currently tagged
+`codeproof-sandbox:latest`, so the next evaluation run automatically picks
+up the rebuilt image.
+
+**Not yet done**: a live end-to-end confirmation that this now produces an
+actual PASS verdict — blocked in this session on `GEMINI_API_KEY` not
+being present in the shell environment used to run a verification script
+directly, so the retest needs to happen through the running backend
+(which has its own working credentials) rather than standalone.

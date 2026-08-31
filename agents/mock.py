@@ -12,6 +12,7 @@ stub that always claims success.
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,10 @@ class Playbook:
     files_changed: list[str]
     patch_explanation: str
     test_command: str
+    # Optional: (name, command) pairs the mock skeptic runs for real via the
+    # sandbox — a scripted stand-in for what a live skeptic agent would come
+    # up with itself. Empty by default (most benchmark cases don't need one).
+    adversarial_scenarios: list[tuple[str, str]] = dataclasses.field(default_factory=list)
 
 
 class MockCodingAgent(CodingAgent):
@@ -36,10 +41,8 @@ class MockCodingAgent(CodingAgent):
         super().__init__(name="mock-agent")
         self.sandbox = sandbox
         self.playbook = playbook
-        self._repo_path: Path | None = None
 
     def initialize(self, issue_title: str, issue_body: str, repo_path: Path) -> None:
-        self._repo_path = repo_path
         self._log("system", "You are a coding agent. Reproduce the issue, then propose a minimal fix.")
         self._log("instruction", f"Issue: {issue_title}\n\n{issue_body}")
 
@@ -87,11 +90,13 @@ class MockCodingAgent(CodingAgent):
         return patch
 
     def apply_patch(self, patch: Patch) -> None:
-        assert self._repo_path is not None
-        patch_file = self._repo_path / ".codeproof_patch.diff"
-        patch_file.write_text(patch.diff, encoding="utf-8")
-        self._log("command", f"git apply {patch_file.name}")
-        result = self.sandbox.run(f"git apply --whitespace=nowarn {patch_file.name}")
+        patch_filename = ".codeproof_patch.diff"
+        # Sandbox.write_file writes with newline="" — matters here: a plain
+        # write_text on Windows silently turns \n into \r\n, which can make
+        # a byte-perfect patch fail to apply against a Linux checkout.
+        self.sandbox.write_file(patch_filename, patch.diff)
+        self._log("command", f"git apply {patch_filename}")
+        result = self.sandbox.run(f"git apply --whitespace=nowarn {patch_filename}")
         self._log("tool_result", result.stdout + result.stderr, exit_code=result.exit_code)
         if result.exit_code != 0:
             raise RuntimeError(f"failed to apply patch: {result.stderr}")
@@ -102,6 +107,19 @@ class MockCodingAgent(CodingAgent):
         self._log("tool_result", result.stdout + result.stderr, exit_code=result.exit_code)
         passed, failed, total = _parse_pytest_summary(result.stdout + result.stderr)
         return TestRunResult(passed=passed, failed=failed, total=total, raw_output=result.stdout + result.stderr)
+
+    def run_custom_stage(self, prompt: str, allow_write: bool = True) -> str:
+        # The mock agent can't reason about an arbitrary prompt — it runs
+        # whatever adversarial scenarios the benchmark case scripted (still
+        # real command execution, real pass/fail), a scripted stand-in for
+        # what a live skeptic agent would come up with on its own.
+        scenarios = []
+        for name, command in self.playbook.adversarial_scenarios:
+            self._log("tool_call", f"skeptic scenario: {name} -> {command}")
+            result = self.sandbox.run(command)
+            self._log("tool_result", result.stdout + result.stderr, exit_code=result.exit_code)
+            scenarios.append({"name": name, "passed": result.exit_code == 0, "notes": (result.stdout + result.stderr)[:500]})
+        return json.dumps({"scenarios": scenarios})
 
 
 def _parse_pytest_summary(output: str) -> tuple[int, int, int]:
