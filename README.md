@@ -19,6 +19,10 @@ faith. Given a real GitHub issue and a patch an agent proposes, CodeProof:
 
 > The agent makes the claim. CodeProof provides the evidence.
 
+## Demo
+
+https://youtu.be/Gg3T6QbHpK8?si=KpaSWbYaZLpHaZYE
+
 ## Problem
 
 Coding agents report success confidently and often wrongly. "Tests pass"
